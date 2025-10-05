@@ -33,7 +33,7 @@ export const Recordings: React.FC = () => {
     url: '',
     title: '',
     quality: 'best',
-    format: 'mp4',
+    format: 'ts',
   });
 
   useEffect(() => {
@@ -59,7 +59,7 @@ export const Recordings: React.FC = () => {
       updateRecording(recording);
       toast.success('Recording started');
       setModalOpen(false);
-      setFormData({ url: '', title: '', quality: 'best', format: 'mp4' });
+      setFormData({ url: '', title: '', quality: 'best', format: 'ts' });
     } catch (error: any) {
       toast.error(error.response?.data?.error || 'Failed to start recording');
     }

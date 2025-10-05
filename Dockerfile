@@ -27,6 +27,9 @@ RUN apk add --no-cache \
     py3-pip \
     && rm -rf /var/cache/apk/*
 
+# Install yt-dlp for sites not supported by streamlink (like Chaturbate)
+RUN pip3 install --no-cache-dir yt-dlp --break-system-packages
+
 # Create app directory
 WORKDIR /app
 

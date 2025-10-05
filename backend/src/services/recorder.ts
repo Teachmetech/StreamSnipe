@@ -6,6 +6,7 @@ import { config } from '../config';
 import { Recording, RecordingProcess } from '../types';
 import { RecordingModel } from '../models/Recording';
 import { broadcastRecordingUpdate } from '../websocket';
+import { getRecorderTool, getQualityFormat } from '../utils/recorder-tools';
 
 class RecorderService {
   private activeRecordings: Map<string, RecordingProcess> = new Map();
@@ -47,9 +48,9 @@ class RecorderService {
       filePath,
     });
     
-    // Start streamlink process
+    // Start recording process (streamlink or yt-dlp)
     try {
-      const process = await this.spawnStreamlink(url, quality, filePath);
+      const process = await this.spawnStreamlink(url, quality, filePath, platform);
       
       this.activeRecordings.set(recording.id, {
         id: recording.id,
@@ -121,26 +122,54 @@ class RecorderService {
     return this.activeRecordings.has(id);
   }
 
-  private spawnStreamlink(url: string, quality: string, outputPath: string): Promise<ChildProcess> {
+  private spawnStreamlink(url: string, quality: string, outputPath: string, platform: string): Promise<ChildProcess> {
     return new Promise((resolve, reject) => {
-      const args = [
-        url,
-        quality,
-        '-o', outputPath,
-        '--force',
-        '--hls-live-restart',
-        '--stream-timeout', '120',
-        '--retry-streams', '10',
-        '--retry-max', '20',
-        '--retry-open', '3',
-        '--hls-segment-timeout', '120',
-      ];
+      // Determine which tool to use
+      const tool = getRecorderTool(platform);
+      const qualityFormat = getQualityFormat(tool, quality);
       
-      console.log(`[Recorder] Starting streamlink for ${url} with quality ${quality}`);
+      console.log(`[Recorder] Using ${tool} for platform: ${platform}`);
+      console.log(`[Recorder] Starting recording for ${url} with quality ${qualityFormat}`);
       console.log(`[Recorder] Output: ${outputPath}`);
-      console.log(`[Recorder] Command: streamlink ${args.join(' ')}`);
       
-      const process = spawn(config.recording.streamlinkPath, args);
+      let command: string;
+      let args: string[];
+      
+      if (tool === 'streamlink') {
+        command = config.recording.streamlinkPath;
+        args = [
+          url,
+          qualityFormat,
+          '-o', outputPath,
+          '--force',
+          '--hls-live-restart',
+          '--stream-timeout', '120',
+          '--retry-streams', '10',
+          '--retry-max', '20',
+          '--retry-open', '3',
+          '--stream-segment-timeout', '120',
+        ];
+      } else {
+        // yt-dlp
+        command = config.recording.ytDlpPath;
+        args = [
+          url,
+          '-f', qualityFormat,
+          '-o', outputPath,
+          '--no-part',
+          '--no-mtime',
+          '--hls-use-mpegts',
+          '--no-live-from-start',  // Start from current time for live streams
+          '--concurrent-fragments', '5',
+          '--retries', '10',
+          '--fragment-retries', '10',
+          '--no-warnings',
+        ];
+      }
+      
+      console.log(`[Recorder] Command: ${command} ${args.join(' ')}`);
+      
+      const process = spawn(command, args);
       
       let started = false;
       let errorOutput = '';
@@ -148,15 +177,19 @@ class RecorderService {
       
       process.stdout?.on('data', (data) => {
         const output = data.toString();
-        console.log(`[Recorder] streamlink stdout: ${output}`);
+        console.log(`[Recorder] stdout: ${output}`);
         
-        // Consider it started if we see any of these indicators
+        // Consider it started if we see any of these indicators (works for both tools)
         if (!started && (
+          // Streamlink indicators
           output.includes('Opening stream') ||
           output.includes('Starting output') ||
           output.includes('Writing output to') ||
           output.includes('Stream ended') ||
-          output.includes('[download]')
+          // yt-dlp indicators
+          output.includes('[download]') ||
+          output.includes('Downloading') ||
+          output.includes('[info]')
         )) {
           console.log('[Recorder] Stream process confirmed started');
           started = true;
@@ -168,13 +201,18 @@ class RecorderService {
       process.stderr?.on('data', (data) => {
         const output = data.toString();
         errorOutput += output;
-        console.log(`[Recorder] streamlink stderr: ${output}`);
+        console.log(`[Recorder] stderr: ${output}`);
         
-        // Also check stderr for positive indicators
+        // Also check stderr for positive indicators (both tools)
         if (!started && (
+          // Streamlink indicators
           output.includes('Found matching plugin') ||
           output.includes('Available streams:') ||
-          output.includes('Opening stream')
+          output.includes('Opening stream') ||
+          // yt-dlp indicators
+          output.includes('[youtube]') ||
+          output.includes('[generic]') ||
+          output.includes('Extracting URL')
         )) {
           console.log('[Recorder] Stream detected in stderr, assuming started');
           started = true;
@@ -182,14 +220,19 @@ class RecorderService {
           resolve(process);
         }
         
-        // Only reject on fatal errors, not warnings
+        // Only reject on fatal errors, not warnings (both tools)
         if (!started && (
+          // Streamlink errors
           output.includes('No playable streams found') ||
           output.includes('Unable to open URL') ||
-          output.includes('Failed to start stream')
+          output.includes('Failed to start stream') ||
+          output.includes('No plugin can handle URL') ||
+          // yt-dlp errors
+          output.includes('Unsupported URL') ||
+          output.includes('ERROR:') && output.includes('is not a valid URL')
         )) {
           console.error('[Recorder] Fatal error detected');
-          reject(new Error(`Streamlink error: ${output}`));
+          reject(new Error(`Recording error: ${output}`));
         }
       });
       
@@ -229,7 +272,15 @@ class RecorderService {
     process.on('exit', (code, signal) => {
       console.log(`Recording ${recordingId} exited with code ${code}, signal ${signal}`);
       
+      // Check if this recording was manually stopped (no longer in activeRecordings)
+      const wasManualStop = !this.activeRecordings.has(recordingId);
       this.activeRecordings.delete(recordingId);
+      
+      // If manually stopped, don't override the status set by stopRecording
+      if (wasManualStop) {
+        console.log(`Recording ${recordingId} was manually stopped, skipping status update`);
+        return;
+      }
       
       const fileSize = this.getFileSize(filePath);
       const status = code === 0 ? 'completed' : 'failed';

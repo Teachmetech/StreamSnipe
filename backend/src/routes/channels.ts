@@ -31,7 +31,7 @@ router.get('/:id', (req, res) => {
   }
 });
 
-router.post('/', (req, res) => {
+router.post('/', async (req, res) => {
   try {
     const { url: inputUrl, name, autoRecord, quality, enabled, platform: inputPlatform } = req.body;
 
@@ -51,6 +51,14 @@ router.post('/', (req, res) => {
       enabled: enabled ?? true,
     });
 
+    // Check if live and start recording if autoRecord is enabled
+    // Don't await - run in background to respond quickly
+    if (autoRecord && enabled) {
+      monitorService.checkAndStartRecording(channel.id).catch(error => {
+        console.error(`Error checking new channel ${channel.name}:`, error);
+      });
+    }
+
     res.status(201).json(channel);
   } catch (error: any) {
     console.error('Error creating channel:', error);
@@ -60,10 +68,17 @@ router.post('/', (req, res) => {
 
 router.patch('/:id', (req, res) => {
   try {
-    const { url, name, autoRecord, quality, enabled } = req.body;
+    const { url: inputUrl, name, autoRecord, quality, enabled, platform } = req.body;
+    
+    // Normalize URL if provided
+    let normalizedUrl = inputUrl;
+    if (inputUrl) {
+      const parsed = normalizeStreamUrl(inputUrl, platform);
+      normalizedUrl = parsed.url;
+    }
     
     const channel = ChannelModel.update(req.params.id, {
-      url,
+      url: normalizedUrl,
       name,
       autoRecord,
       quality,
@@ -117,6 +132,35 @@ router.post('/:id/test', async (req, res) => {
   } catch (error: any) {
     console.error('Error testing channel:', error);
     res.status(500).json({ error: 'Failed to test channel' });
+  }
+});
+
+// Utility endpoint to fix all channel URLs (removes invisible characters)
+router.post('/fix-urls', (req, res) => {
+  try {
+    const channels = ChannelModel.findAll();
+    const fixed: string[] = [];
+    
+    for (const channel of channels) {
+      try {
+        const parsed = normalizeStreamUrl(channel.url, channel.platform);
+        if (parsed.url !== channel.url) {
+          ChannelModel.update(channel.id, { url: parsed.url });
+          fixed.push(channel.id);
+          console.log(`Fixed URL for channel ${channel.name}: ${channel.url} -> ${parsed.url}`);
+        }
+      } catch (error) {
+        console.error(`Failed to fix URL for channel ${channel.id}:`, error);
+      }
+    }
+    
+    res.json({ 
+      message: `Fixed ${fixed.length} channel(s)`,
+      fixedIds: fixed 
+    });
+  } catch (error: any) {
+    console.error('Error fixing channel URLs:', error);
+    res.status(500).json({ error: 'Failed to fix channel URLs' });
   }
 });
 

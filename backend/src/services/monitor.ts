@@ -3,6 +3,7 @@ import { config } from '../config';
 import { ChannelModel } from '../models/Channel';
 import { recorderService } from './recorder';
 import { broadcastChannelUpdate } from '../websocket';
+import { getRecorderTool } from '../utils/recorder-tools';
 
 class MonitorService {
   private intervalId?: NodeJS.Timeout;
@@ -17,8 +18,8 @@ class MonitorService {
     console.log('Starting monitor service');
     this.isRunning = true;
     
-    // Initial check
-    this.checkChannels();
+    // Initial check - also start recording for already-live channels
+    this.checkChannels(true);
     
     // Set up interval
     this.intervalId = setInterval(() => {
@@ -35,7 +36,7 @@ class MonitorService {
     }
   }
 
-  private async checkChannels() {
+  private async checkChannels(isInitialCheck: boolean = false) {
     const channels = ChannelModel.findEnabled();
     const autoRecordChannels = channels.filter(c => c.autoRecord);
     
@@ -43,7 +44,7 @@ class MonitorService {
     
     for (const channel of autoRecordChannels) {
       try {
-        const isLive = await this.checkIfLive(channel.url);
+        const isLive = await this.checkIfLive(channel.url, channel.platform);
         const wasLive = channel.isLive;
         
         // Update channel status
@@ -56,14 +57,26 @@ class MonitorService {
           broadcastChannelUpdate(updated);
         }
         
-        // If channel just went live, start recording
-        if (isLive && !wasLive) {
-          console.log(`Channel ${channel.name} went live, starting recording`);
-          await recorderService.startRecording(channel.url, {
-            quality: channel.quality,
-            title: `${channel.name}_${new Date().toISOString()}`,
-            channelId: channel.id,
-          });
+        // Start recording if:
+        // 1. Channel just went live (transition from offline to online)
+        // 2. Initial startup check and channel is already live
+        const shouldStartRecording = isLive && (!wasLive || isInitialCheck);
+        
+        if (shouldStartRecording) {
+          // Check if already recording this channel
+          const existingRecordings = recorderService.getActiveRecordings();
+          const alreadyRecording = existingRecordings.some(r => r.channelId === channel.id);
+          
+          if (!alreadyRecording) {
+            console.log(`Channel ${channel.name} is live, starting recording`);
+            await recorderService.startRecording(channel.url, {
+              quality: channel.quality,
+              title: `${channel.name}_${new Date().toISOString()}`,
+              channelId: channel.id,
+            });
+          } else {
+            console.log(`Channel ${channel.name} is live but already recording`);
+          }
         }
       } catch (error) {
         console.error(`Error checking channel ${channel.name}:`, error);
@@ -71,10 +84,19 @@ class MonitorService {
     }
   }
 
-  private async checkIfLive(url: string): Promise<boolean> {
+  private async checkIfLive(url: string, platform?: string): Promise<boolean> {
     console.log(`[Monitor] Checking if live: ${url}`);
     
-    // Try multiple methods in sequence
+    // Determine which tool to use
+    const tool = platform ? getRecorderTool(platform) : 'streamlink';
+    console.log(`[Monitor] Using ${tool} for live check`);
+    
+    if (tool === 'yt-dlp') {
+      // Use yt-dlp for platforms like Chaturbate
+      return this.checkWithYtDlp(url);
+    }
+    
+    // Try multiple methods for Streamlink
     const methods = [
       () => this.checkWithJson(url),
       () => this.checkWithStreamList(url),
@@ -273,7 +295,7 @@ class MonitorService {
       return false;
     }
     
-    const isLive = await this.checkIfLive(channel.url);
+    const isLive = await this.checkIfLive(channel.url, channel.platform);
     
     const updated = ChannelModel.update(channel.id, {
       isLive,
@@ -285,6 +307,44 @@ class MonitorService {
     }
     
     return isLive;
+  }
+
+  async checkAndStartRecording(channelId: string): Promise<void> {
+    const channel = ChannelModel.findById(channelId);
+    if (!channel || !channel.enabled || !channel.autoRecord) {
+      return;
+    }
+    
+    console.log(`Checking new channel ${channel.name} for live status`);
+    const isLive = await this.checkIfLive(channel.url, channel.platform);
+    
+    // Update channel status
+    const updated = ChannelModel.update(channel.id, {
+      isLive,
+      lastChecked: new Date().toISOString(),
+    });
+    
+    if (updated) {
+      broadcastChannelUpdate(updated);
+    }
+    
+    // Start recording if live
+    if (isLive) {
+      // Check if already recording this channel
+      const existingRecordings = recorderService.getActiveRecordings();
+      const alreadyRecording = existingRecordings.some(r => r.channelId === channel.id);
+      
+      if (!alreadyRecording) {
+        console.log(`New channel ${channel.name} is live, starting recording`);
+        await recorderService.startRecording(channel.url, {
+          quality: channel.quality,
+          title: `${channel.name}_${new Date().toISOString()}`,
+          channelId: channel.id,
+        });
+      }
+    } else {
+      console.log(`New channel ${channel.name} is offline`);
+    }
   }
 
   async diagnosticCheck(url: string): Promise<any> {
@@ -318,6 +378,61 @@ class MonitorService {
     results.overallResult = await this.checkIfLive(url);
     
     return results;
+  }
+
+  private checkWithYtDlp(url: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      console.log(`[Monitor] Trying yt-dlp method for ${url}`);
+      const args = [
+        url,
+        '--skip-download',
+        '--print', 'title',
+        '--no-warnings',
+      ];
+      const process = spawn(config.recording.ytDlpPath, args);
+      
+      let output = '';
+      let errorOutput = '';
+      
+      process.stdout?.on('data', (data) => {
+        output += data.toString();
+      });
+      
+      process.stderr?.on('data', (data) => {
+        errorOutput += data.toString();
+      });
+      
+      process.on('close', (code) => {
+        console.log(`[Monitor] yt-dlp exit code ${code} for ${url}`);
+        
+        // If we got output (title), the stream is accessible/live
+        if (code === 0 && output.trim()) {
+          console.log(`[Monitor] yt-dlp detected live stream`);
+          resolve(true);
+        } else if (errorOutput.includes('offline') || errorOutput.includes('not available')) {
+          console.log(`[Monitor] Stream is offline`);
+          resolve(false);
+        } else if (code !== 0) {
+          console.log(`[Monitor] yt-dlp failed, assuming offline`);
+          resolve(false);
+        } else {
+          // Got exit code 0 but no output, assume offline
+          resolve(false);
+        }
+      });
+      
+      process.on('error', () => {
+        console.error(`[Monitor] yt-dlp process error`);
+        resolve(false);
+      });
+      
+      setTimeout(() => {
+        if (!process.killed) {
+          process.kill();
+          resolve(false);
+        }
+      }, 15000);
+    });
   }
 }
 

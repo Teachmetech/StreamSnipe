@@ -29,8 +29,9 @@ export const config = {
   
   recording: {
     defaultQuality: process.env.DEFAULT_QUALITY || 'best',
-    defaultFormat: process.env.DEFAULT_FORMAT || 'mp4',
+    defaultFormat: process.env.DEFAULT_FORMAT || 'ts',
     streamlinkPath: process.env.STREAMLINK_PATH || 'streamlink',
+    ytDlpPath: process.env.YT_DLP_PATH || 'yt-dlp',
     ffmpegPath: process.env.FFMPEG_PATH || 'ffmpeg',
   },
   

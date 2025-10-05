@@ -5,6 +5,22 @@ export interface ParsedStreamUrl {
   displayName: string;
 }
 
+/**
+ * Sanitizes a URL by removing invisible Unicode characters and normalizing whitespace
+ */
+export function sanitizeUrl(input: string): string {
+  // Remove invisible characters, zero-width characters, and other problematic Unicode
+  // This includes: zero-width space, zero-width non-joiner, zero-width joiner, 
+  // word joiner, left-to-right mark, right-to-left mark, etc.
+  let sanitized = input
+    .replace(/[\u200B-\u200D\uFEFF\u2060\u202A-\u202E]/g, '') // Zero-width and directional marks
+    .replace(/[\u00AD\u034F\u061C]/g, '') // Soft hyphen, combining grapheme joiner, Arabic letter mark
+    .replace(/[\p{Cf}]/gu, '') // Format characters category
+    .trim(); // Standard trim for spaces, tabs, newlines
+  
+  return sanitized;
+}
+
 export function detectPlatformFromUrl(input: string): string {
   const lower = input.toLowerCase();
   
@@ -19,7 +35,7 @@ export function detectPlatformFromUrl(input: string): string {
 }
 
 export function normalizeStreamUrl(input: string, platform?: string): ParsedStreamUrl {
-  let url = input.trim();
+  let url = sanitizeUrl(input);
   let detectedPlatform = platform || detectPlatformFromUrl(url);
   let username = '';
   let displayName = '';
@@ -57,30 +73,34 @@ export function normalizeStreamUrl(input: string, platform?: string): ParsedStre
       
       if (detectedPlatform === 'twitch') {
         // Twitch: https://twitch.tv/username
-        username = pathname.split('/').filter(Boolean)[0] || '';
+        username = sanitizeUrl(pathname.split('/').filter(Boolean)[0] || '');
         displayName = username;
+        url = `https://twitch.tv/${username}`;
       } else if (detectedPlatform === 'youtube') {
         // YouTube: various formats
         if (pathname.includes('/watch')) {
           displayName = 'YouTube Stream';
         } else if (pathname.includes('/channel/') || pathname.includes('/@')) {
-          username = pathname.split('/').pop() || '';
+          username = sanitizeUrl(pathname.split('/').pop() || '');
           displayName = username.replace('@', '');
         } else {
           displayName = 'YouTube Stream';
         }
       } else if (detectedPlatform === 'chaturbate') {
         // Chaturbate: https://chaturbate.com/username/
-        username = pathname.split('/').filter(Boolean)[0] || '';
+        username = sanitizeUrl(pathname.split('/').filter(Boolean)[0] || '');
         displayName = username;
+        // Reconstruct clean URL without trailing slashes or invisible characters
+        url = `https://chaturbate.com/${username}`;
       } else if (detectedPlatform === 'kick') {
         // Kick: https://kick.com/username
-        username = pathname.split('/').filter(Boolean)[0] || '';
+        username = sanitizeUrl(pathname.split('/').filter(Boolean)[0] || '');
         displayName = username;
+        url = `https://kick.com/${username}`;
       } else {
         // Generic
         const parts = pathname.split('/').filter(Boolean);
-        username = parts[parts.length - 1] || '';
+        username = sanitizeUrl(parts[parts.length - 1] || '');
         displayName = username || urlObj.hostname;
       }
     } catch (error) {

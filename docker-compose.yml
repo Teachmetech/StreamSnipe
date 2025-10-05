@@ -4,7 +4,7 @@ services:
     container_name: streamsnipe
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "3006:3000"
     volumes:
       # Recordings storage
       - ./recordings:/app/recordings
@@ -35,7 +35,7 @@ services:
       
       # Recording Defaults
       - DEFAULT_QUALITY=best
-      - DEFAULT_FORMAT=mp4
+      - DEFAULT_FORMAT=ts
       - STREAMLINK_PATH=streamlink
       - FFMPEG_PATH=ffmpeg
       
