@@ -1,0 +1,57 @@
+services:
+  streamsnipe:
+    build: .
+    container_name: streamsnipe
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      # Recordings storage
+      - ./recordings:/app/recordings
+      # Database and config
+      - ./data:/app/data
+      - ./config:/app/config
+    environment:
+      # Server
+      - NODE_ENV=production
+      - PORT=3000
+      
+      # Authentication (optional)
+      - AUTH_ENABLED=false
+      - JWT_SECRET=change-this-to-a-random-secret-in-production
+      - ADMIN_PASSWORD=admin
+      
+      # Storage
+      - RECORDINGS_PATH=/app/recordings
+      - MAX_DISK_USAGE_PERCENT=90
+      
+      # Cloud Storage (optional)
+      - S3_ENABLED=false
+      - S3_BUCKET=
+      - S3_REGION=us-east-1
+      - S3_ACCESS_KEY_ID=
+      - S3_SECRET_ACCESS_KEY=
+      - S3_ENDPOINT=
+      
+      # Recording Defaults
+      - DEFAULT_QUALITY=best
+      - DEFAULT_FORMAT=mp4
+      - STREAMLINK_PATH=streamlink
+      - FFMPEG_PATH=ffmpeg
+      
+      # Monitoring
+      - MONITOR_INTERVAL_SECONDS=60
+      - AUTO_CLEANUP_ENABLED=false
+      - AUTO_CLEANUP_DAYS=30
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  recordings:
+  data:
+  config:
+

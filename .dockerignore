@@ -1,0 +1,17 @@
+node_modules
+dist
+build
+*.log
+.env
+.DS_Store
+recordings
+data
+*.sqlite
+*.sqlite-journal
+.git
+.gitignore
+README.md
+.vscode
+.idea
+*.md
+

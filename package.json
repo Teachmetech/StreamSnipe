@@ -1,0 +1,24 @@
+{
+  "name": "streamsnipe",
+  "version": "1.0.0",
+  "description": "Self-hosted stream recorder for Twitch, YouTube, and more",
+  "private": true,
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev --workspace=backend\" \"npm run dev --workspace=frontend\"",
+    "build": "npm run build --workspace=backend && npm run build --workspace=frontend",
+    "start": "npm run start --workspace=backend",
+    "backend": "npm run dev --workspace=backend",
+    "frontend": "npm run dev --workspace=frontend"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
+
